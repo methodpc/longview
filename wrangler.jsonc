@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "longview",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "account_id": "442609eacf42a707e4a6512894bc12c4",
+
+  // Static front end; /api/* goes to the Worker first.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+
+  // Custom domain on your Cloudflare-managed zone. Change the subdomain here if you prefer another.
+  "routes": [{ "pattern": "invest.cameronmedialab.com", "custom_domain": true }],
+
+  "d1_databases": [
+    { "binding": "DB", "database_name": "longview", "database_id": "ea082495-a64f-4193-8cfa-120a7ddc9ced" }
+  ],
+
+  // Refreshes stored fundamentals (a few symbols per run) every 10 minutes.
+  "triggers": { "crons": ["*/10 * * * *"] },
+
+  "vars": {
+    // 7 fits the Workers Free plan (50 subrequests per run). On Workers Paid, raise to 40.
+    "REFRESH_BATCH": "7"
+  },
+  "observability": { "enabled": true }
+
+  // Secrets (not in this file):
+  //   npx wrangler secret put FMP_API_KEY     <- required for live data
+  //   npx wrangler secret put ADMIN_TOKEN     <- optional, lets you trigger /api/admin/refresh
+}

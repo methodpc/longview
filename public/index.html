@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Longview</title>
+<meta name="description" content="Long-term investing dashboard: North American and global markets, strategy scores, fair values and projections.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f7b74'/%3E%3Cpath d='M6 22 L13 15 L18 19 L26 9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+/* Layout: a quiet slate workbench. Strategy choice sits on top and re-scores every view below it. */
+:root{
+  --bg:#f2f4f6; --surface:#ffffff; --ink:#132130; --muted:#5a6876; --line:#dce2e9; --accent:#0f7b74; --accent-soft:#e2f2f0;
+  --good:#1a8a4c; --warn:#b7791f; --bad:#c3402f;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d141b; --surface:#141e28; --ink:#e4ebf2; --muted:#93a1af; --line:#233140; --accent:#3cc0b3; --accent-soft:#16312f;
+    --good:#43c27b; --warn:#e2a744; --bad:#f07360; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d141b; --surface:#141e28; --ink:#e4ebf2; --muted:#93a1af; --line:#233140; --accent:#3cc0b3; --accent-soft:#16312f;
+  --good:#43c27b; --warn:#e2a744; --bad:#f07360; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5}
+h1,h2,h3{font-family:var(--display);font-weight:700;margin:0;text-wrap:balance;letter-spacing:-0.01em}
+h2{font-size:20px} h3{font-size:16px}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num,td.n,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 24px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.brand{display:flex;align-items:baseline;gap:8px;margin-right:auto}
+.brand h1{font-size:23px}
+.badge{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
+.badge.live{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.badge.demo{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.tabs{display:flex;gap:2px;flex-wrap:wrap}
+.tabs a{padding:7px 12px;border-radius:8px;text-decoration:none;color:var(--muted);font-weight:500}
+.tabs a[aria-current="page"]{background:var(--accent-soft);color:var(--accent)}
+.tabs a:hover{color:var(--ink)}
+.search{position:relative}
+.search input{width:220px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.sugg{position:absolute;top:100%;right:0;width:320px;background:var(--surface);border:1px solid var(--line);border-radius:8px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none;z-index:20;max-height:360px;overflow:auto}
+.sugg.on{display:block}
+.sugg button{display:grid;grid-template-columns:90px 1fr auto;gap:8px;width:100%;text-align:left;border:0;background:none;padding:8px 10px;cursor:pointer;font-size:14px}
+.sugg button:hover,.sugg button.hl{background:var(--accent-soft)}
+.sugg .x2{color:var(--muted);font-size:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:5px 10px;cursor:pointer;font-size:13px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+
+.stratbar{padding:12px 24px 10px;display:grid;gap:8px;border-bottom:1px solid var(--line);background:var(--surface)}
+.stratbar .label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:var(--bg);padding:5px 12px;border-radius:999px;cursor:pointer;font-size:14px}
+.pill small{color:var(--muted);margin-left:4px}
+.pill[aria-pressed="true"]{border-color:var(--accent);background:var(--accent);color:var(--surface)}
+.pill[aria-pressed="true"] small{color:inherit;opacity:.8}
+.tagline{margin:0;color:var(--muted);max-width:90ch;font-size:14px}
+
+.notice{margin:12px 24px 0;padding:8px 12px;border-left:3px solid var(--warn);background:var(--surface);font-size:13px;color:var(--muted)}
+.notice:empty{display:none}
+main{padding:16px 24px 48px;max-width:1440px;margin:0 auto}
+.view{display:none}
+.view.on{display:block}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card > header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.card > header p{margin:0;color:var(--muted);font-size:13px}
+.grid{display:grid;gap:16px}
+.grid > *{min-width:0}
+.two{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start}
+.halves{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+@media (max-width:980px){.two,.halves{grid-template-columns:1fr}}
+
+.idx{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.ix{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left}
+.ix:hover{border-color:var(--accent)}
+.ix .r{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
+.ix .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ix .v{font-family:var(--mono);font-size:17px}
+.ix .c{font-family:var(--mono);font-size:13px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle;background:var(--muted)}
+.dot.open{background:var(--good)}
+
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+@media (max-width:1100px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.tile .k{font-size:12px;color:var(--muted)}
+.tile .v{font-family:var(--mono);font-size:21px;font-weight:500;font-variant-numeric:tabular-nums}
+.tile .s{font-size:12px;color:var(--muted)}
+
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{font-size:12px;text-align:left;color:var(--muted);font-weight:600;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th.n,td.n{text-align:right}
+th.sort{cursor:pointer;user-select:none}
+th.sort:hover{color:var(--ink)}
+th[aria-sort="ascending"]::after{content:" ▲";font-size:9px}
+th[aria-sort="descending"]::after{content:" ▼";font-size:9px}
+td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:var(--accent-soft)}
+.tk{font-family:var(--mono);font-weight:500}
+.nm{color:var(--muted);max-width:190px;overflow:hidden;text-overflow:ellipsis}
+.pos{color:var(--good)} .neg{color:var(--bad)}
+.score{display:inline-block;min-width:38px;text-align:center;padding:1px 6px;border-radius:6px;font-family:var(--mono);font-size:13px;font-weight:500}
+.s-good{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good)}
+.s-warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.s-bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.s-na{color:var(--muted)}
+td input{width:84px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);text-align:right;font-family:var(--mono)}
+.x{border:0;background:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 4px}
+.x:hover{color:var(--bad)}
+.ccy{font-size:10px;color:var(--muted);margin-left:3px;font-family:var(--body)}
+
+.form{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:12px}
+.form label{display:grid;gap:2px;font-size:12px;color:var(--muted)}
+.form input,.form select,.filters input,.filters select,.ctl input,.ctl select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);min-width:0}
+.btn{padding:7px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--surface);cursor:pointer;font-weight:500}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.sm{padding:4px 10px;font-size:13px}
+details{margin-top:12px;font-size:14px}
+details summary{cursor:pointer;color:var(--accent)}
+textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:8px;font-family:var(--mono);font-size:13px}
+
+.flags{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.flags li{padding:8px 10px;border-radius:8px;border-left:3px solid var(--muted);background:var(--bg);font-size:14px}
+.flags li.warn{border-color:var(--warn)} .flags li.bad{border-color:var(--bad)} .flags li.good{border-color:var(--good)} .flags li.info{border-color:var(--accent)}
+.flags a{cursor:pointer}
+
+.bars{display:grid;gap:6px}
+.bar{display:grid;grid-template-columns:150px 1fr 52px;gap:8px;align-items:center;font-size:13px}
+.track{height:10px;border-radius:5px;background:var(--bg);overflow:hidden}
+.fill{height:100%;background:var(--accent);border-radius:5px}
+.fill.over{background:var(--warn)}
+.range{position:relative;height:6px;border-radius:3px;background:var(--line);width:90px;display:inline-block;vertical-align:middle}
+.range i{position:absolute;top:-3px;width:3px;height:12px;border-radius:2px;background:var(--ink)}
+
+.chart svg{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font-family:var(--mono);font-size:11px}
+.chart .grid line{stroke:var(--line)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:6px}
+.legend i{display:inline-block;width:12px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:8px}
+.ctl label{display:grid;gap:2px;font-size:12px;color:var(--muted)}
+.ctl input,.ctl select{width:120px}
+
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-bottom:12px}
+.filters label{display:grid;gap:2px;font-size:12px;color:var(--muted)}
+.filters input[type=number]{width:90px}
+.chk{display:flex!important;align-items:center;gap:6px!important;font-size:14px!important;color:var(--ink)!important}
+
+#heat svg{width:100%;display:block}
+#heat text{pointer-events:none;font-family:var(--mono)}
+.hlegend{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:8px}
+.hlegend .ramp{width:200px;height:10px;border-radius:5px;background:linear-gradient(90deg,#b8332a,#5a6470,#1f8a4c)}
+
+.news{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.news li{display:grid;gap:2px;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.news li:last-child{border-bottom:0}
+.news a{color:var(--ink);text-decoration:none;font-weight:500}
+.news a:hover{color:var(--accent);text-decoration:underline}
+.news .meta{font-size:12px;color:var(--muted)}
+.news .tkc{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-right:6px;cursor:pointer;background:none}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+
+.strats{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.strat h3{margin-bottom:2px}
+.strat .who{color:var(--muted);font-size:13px;margin:0 0 8px}
+.strat p{margin:0 0 10px;font-size:14px;max-width:65ch}
+.rules{margin:0 0 10px;padding-left:18px;font-size:14px}
+.rules li{margin-bottom:4px}
+.rules span{color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 7px;cursor:pointer;background:var(--bg)}
+.chip:hover{border-color:var(--accent)}
+dl.gloss{display:grid;grid-template-columns:minmax(120px,200px) 1fr;gap:6px 16px;margin:0;font-size:14px}
+dl.gloss dt{font-weight:600} dl.gloss dd{margin:0;color:var(--muted)}
+
+.scrim{position:fixed;inset:0;background:rgba(5,10,15,.45);display:none;z-index:10}
+.scrim.on{display:block}
+#drawer{position:fixed;top:0;right:0;height:100%;width:min(680px,100%);background:var(--surface);border-left:1px solid var(--line);z-index:11;overflow-y:auto;transform:translateX(100%);transition:transform .2s ease;padding:20px}
+#drawer.on{transform:none}
+@media (prefers-reduced-motion:reduce){#drawer{transition:none}}
+.dhead{display:flex;justify-content:space-between;gap:12px;align-items:start}
+.dhead .px{font-family:var(--mono);font-size:26px}
+.kv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}
+.kv > div{background:var(--bg);border-radius:8px;padding:7px 10px}
+.kv .k{font-size:11px;color:var(--muted)} .kv .v{font-family:var(--mono);font-size:15px}
+.kv > div[title]{cursor:help}
+.sec{margin-top:20px}
+.sec h3{margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.checklist{list-style:none;margin:0;padding:0;font-size:14px;display:grid;gap:4px}
+.checklist li{display:grid;grid-template-columns:20px 1fr auto;gap:6px}
+.checklist .val{font-family:var(--mono);color:var(--muted)}
+.mini{display:grid;gap:4px}
+.mini .row{display:grid;grid-template-columns:150px 1fr 40px;gap:8px;align-items:center;font-size:13px;cursor:pointer}
+.mini .row.cur{font-weight:600}
+.models{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.models > div{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.models .k{font-size:12px;color:var(--muted)} .models .v{font-family:var(--mono);font-size:18px}
+.models .main{border-color:var(--accent)}
+.analyst{display:grid;grid-template-columns:repeat(5,1fr);height:12px;border-radius:6px;overflow:hidden;margin:6px 0}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0;max-width:72ch}
+.loading{color:var(--muted);font-size:14px;padding:20px 0}
+@media (max-width:620px){.kv,.models{grid-template-columns:repeat(2,minmax(0,1fr))}.bar{grid-template-columns:100px 1fr 48px}main,.top,.stratbar{padding-left:16px;padding-right:16px}.notice{margin:12px 16px 0}.search input{width:160px}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><h1>Longview</h1><span class="badge" id="badge">…</span></div>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#markets" data-v="markets">Markets</a>
+    <a href="#portfolio" data-v="portfolio">Portfolio</a>
+    <a href="#watchlist" data-v="watchlist">Watchlist</a>
+    <a href="#screener" data-v="screener">Screener</a>
+    <a href="#learn" data-v="learn">Learn</a>
+  </nav>
+  <div class="seg" role="group" aria-label="Show money in"><button type="button" data-ccy="CAD">CAD</button><button type="button" data-ccy="USD">USD</button></div>
+  <div class="search">
+    <label for="q" class="sr" style="position:absolute;left:-9999px">Search stocks</label>
+    <input id="q" type="search" placeholder="Search AAPL, RY.TO, Shopify…" autocomplete="off">
+    <div class="sugg" id="sugg" role="listbox"></div>
+  </div>
+</header>
+<section class="stratbar" aria-label="Investing strategy">
+  <span class="label">Score everything by the strategy of</span>
+  <div class="pills" id="pills"></div>
+  <p class="tagline" id="tagline"></p>
+</section>
+<div class="notice" id="notice"></div>
+
+<main>
+  <!-- MARKETS -->
+  <section class="view" id="view-markets">
+    <div class="idx" id="indices"></div>
+    <div class="idx" id="macro" style="margin-top:10px"></div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="grid">
+        <div class="card">
+          <header><h2 id="oppTitle">Opportunities</h2><p>Strong strategy fit, trading below the model's fair value</p></header>
+          <div class="tablewrap"><table id="opps"></table></div>
+        </div>
+        <div class="card">
+          <header><h2>Today's movers</h2>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <div class="seg" id="moverMkt"><button type="button" data-m="US" aria-pressed="true">US large caps</button><button type="button" data-m="TSX">TSX 60</button></div>
+              <div class="seg" id="moverKind"><button type="button" data-k="up" aria-pressed="true">Gainers</button><button type="button" data-k="down">Losers</button><button type="button" data-k="vol">Most active</button></div>
+            </div>
+          </header>
+          <div class="tablewrap"><table id="movers"></table></div>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card"><header><h2>Earnings coming up</h2><p>Next 14 days, companies you follow</p></header><div class="tablewrap"><table id="earn"></table></div></div>
+        <div class="card"><header><h2>News</h2><div class="seg" id="newsSel"><button type="button" data-n="mine" aria-pressed="true">My stocks</button><button type="button" data-n="all">Market</button></div></header><ul class="news" id="news"></ul></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <header><h2>Market map</h2><p>Box size is company size in USD. Click any box for its report.</p></header>
+      <div class="ctl">
+        <label for="hmkt">Market<select id="hmkt" style="width:auto"><option value="ALL">US + TSX</option><option value="US">US large caps</option><option value="TSX">TSX 60</option></select></label>
+        <label for="hcolor">Color by<select id="hcolor" style="width:auto">
+          <option value="dchg">Today's change</option>
+          <option value="chg">1-year change</option>
+          <option value="score">Strategy score</option>
+          <option value="up">Upside to fair value</option>
+        </select></label>
+      </div>
+      <div id="heat"></div>
+      <div class="hlegend" id="hleg"></div>
+    </div>
+  </section>
+
+  <!-- PORTFOLIO -->
+  <section class="view" id="view-portfolio">
+    <div class="tiles" id="ptiles"></div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="grid">
+        <div class="card">
+          <header><h2>Holdings</h2><p id="syncMsg">Edit shares or cost inline. Costs are in each security's own currency.</p></header>
+          <div class="tablewrap"><table id="htable"></table></div>
+          <form class="form" id="addform">
+            <label for="addT">Ticker<input id="addT" required placeholder="AAPL or RY.TO" size="10" autocomplete="off"></label>
+            <label for="addS">Shares<input id="addS" type="number" step="any" min="0" required size="6"></label>
+            <label for="addC">Avg cost<input id="addC" type="number" step="any" min="0" size="8" placeholder="today's price"></label>
+            <button class="btn" type="submit">Add holding</button>
+            <button class="btn ghost" type="button" id="clearP">Clear all</button>
+            <span class="note" id="addMsg"></span>
+          </form>
+          <details>
+            <summary>Paste holdings from your broker</summary>
+            <p class="note">One per line: ticker, shares, average cost. Canadian listings end in .TO (for example ENB.TO).</p>
+            <textarea id="imp" placeholder="XEQT.TO, 120, 28.40&#10;AAPL 15 170"></textarea>
+            <div class="form"><button class="btn" type="button" id="impAdd">Add these</button><button class="btn ghost" type="button" id="impRep">Replace my portfolio</button><span id="impMsg" class="note"></span></div>
+          </details>
+        </div>
+        <div class="card">
+          <header><h2>What your portfolio could grow to</h2><p>Each holding's projected yearly return, weighted by its size</p></header>
+          <div class="ctl">
+            <label for="hz">Years<select id="hz"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></label>
+            <label for="mc">Add monthly<input id="mc" type="number" min="0" step="50" value="500"></label>
+          </div>
+          <div class="chart" id="pchart"></div>
+          <div class="legend" id="plegend"></div>
+          <p class="note" id="pnote"></p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card"><header><h2>Checkup</h2><p>Against your chosen strategy</p></header><ul class="flags" id="flags"></ul></div>
+        <div class="card"><header><h2>Where your money sits</h2><div class="seg" id="allocBy"><button type="button" data-a="sec" aria-pressed="true">Sector</button><button type="button" data-a="ccy">Currency</button><button type="button" data-a="ex">Market</button></div></header><div class="bars" id="alloc"></div></div>
+        <div class="card"><header><h2>Ideas that fit your strategy</h2><p>Highest scores you don't own yet</p></header><div class="tablewrap"><table id="ideas"></table></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WATCHLIST -->
+  <section class="view" id="view-watchlist">
+    <div class="card">
+      <header><h2>Watchlist</h2><p>Live quotes for companies you're researching</p></header>
+      <div class="tablewrap"><table id="wtable"></table></div>
+      <form class="form" id="wform"><label for="wT">Ticker<input id="wT" required placeholder="MSFT or CNR.TO" size="12" autocomplete="off"></label><button class="btn" type="submit">Add to watchlist</button><span class="note" id="wMsg"></span></form>
+    </div>
+  </section>
+
+  <!-- SCREENER -->
+  <section class="view" id="view-screener">
+    <div class="card">
+      <header><h2>Screener</h2><p id="scount"></p></header>
+      <div class="filters">
+        <label for="fq">Search<input id="fq" type="search" placeholder="Ticker or name"></label>
+        <label for="fex">Market<select id="fex"><option value="">US + TSX</option><option value="US">US</option><option value="TSX">TSX</option></select></label>
+        <label for="fsec">Sector<select id="fsec"><option value="">All sectors</option></select></label>
+        <label for="ftype">Type<select id="ftype"><option value="">Stocks &amp; funds</option><option>Stock</option><option>Fund</option></select></label>
+        <label for="fpe">Max P/E<input id="fpe" type="number" min="0" placeholder="any"></label>
+        <label for="fdiv">Min dividend %<input id="fdiv" type="number" min="0" step="0.5" placeholder="any"></label>
+        <label for="fup">Min upside %<input id="fup" type="number" step="5" placeholder="any"></label>
+        <label class="chk" for="fpass"><input id="fpass" type="checkbox"> Strong fits only (70+)</label>
+      </div>
+      <div class="tablewrap"><table id="stable"></table></div>
+    </div>
+  </section>
+
+  <!-- LEARN -->
+  <section class="view" id="view-learn">
+    <div class="strats" id="stratcards"></div>
+    <div class="card" style="margin-top:16px">
+      <header><h2>How the estimates work</h2></header>
+      <div style="max-width:78ch;font-size:14px">
+        <p><b>Fair value</b> averages two classic models. The <i>earnings model</i> grows today's earnings per share at the expected rate for 5 years, then at half that rate for 5 more, adds the dividends paid along the way, values year-10 earnings at 17 times (roughly the long-run market average), and discounts everything back at 8% a year. The <i>Graham formula</i> is Benjamin Graham's shortcut: earnings × (8.5 + 2 × growth rate), with growth capped at 15%.</p>
+        <p><b>Expected growth</b> comes from analysts' average earnings-per-share estimates for the next ~3 years where they exist. Otherwise it falls back to the company's own 5-year earnings history, capped at 15%. The stock report tells you which one was used.</p>
+        <p><b>5-year projections</b> combine earnings growth, the dividend, and where the P/E ratio might drift. The base case grows earnings at the expected rate and moves the P/E halfway toward a "normal" level for that growth (10 + 1.5 × growth). The bear case halves growth and shrinks the P/E. The bull case adds 30% to growth and keeps the higher P/E. Funds use a long-run return assumption instead, shown on each fund's report.</p>
+        <p>These models are simple on purpose, so you can check the math. Real results regularly land outside the bear-to-bull range. Nothing here is financial advice.</p>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <header><h2>Glossary</h2><p>Hover any metric in the app to see these explanations</p></header>
+      <dl class="gloss" id="gloss"></dl>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside id="drawer" aria-hidden="true" aria-label="Stock report"></aside>
+<script src="/app.js"></script>
+</body>
+</html>
