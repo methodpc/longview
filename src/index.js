@@ -6,6 +6,7 @@ import { json, bad, SYM, cleanSym, cached, userOf, userSymbols, HOUR } from './u
 import { handleFinnhub, tickFinnhub } from './live-finnhub.js';
 import { FH_CURATED } from './finnhub.js';
 
+const VERSION = '0.3.1'; // bump on each release; shown at /api/status to confirm deploys
 const FUND_MAX_AGE = 20 * HOUR; // fundamentals older than this are refreshed
 
 // Which data source is active. DATA_PROVIDER picks one; otherwise whichever key exists; otherwise demo.
@@ -51,7 +52,7 @@ async function api(req, env, ctx, url) {
       stored = r?.n || 0; oldest = r?.o || null;
     } catch {}
     const names = { fmp: 'Financial Modeling Prep', finnhub: 'Finnhub (free beta)', demo: 'Demo sample' };
-    return json({ live: mode !== 'demo', mode, provider: names[mode], user, stored, curated: mode === 'finnhub' ? FH_CURATED.length : CURATED.length, oldest, now: Date.now(), history: mode === 'fmp' || !!env.TWELVEDATA_API_KEY });
+    return json({ version: VERSION, live: mode !== 'demo', mode, provider: names[mode], user, stored, curated: mode === 'finnhub' ? FH_CURATED.length : CURATED.length, oldest, now: Date.now(), history: mode === 'fmp' || !!env.TWELVEDATA_API_KEY });
   }
 
   /* ---- markets: global indices + FX/commodities ---- */
