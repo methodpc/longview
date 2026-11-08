@@ -2,35 +2,21 @@
 import { Fmp, quotes, fetchFundamentals, normQuote, normNews, normHistory, normTarget, normGrades } from './fmp.js';
 import { INDICES, MACRO, CURATED, FUNDS } from './universe.js';
 import { DEMO_UNIVERSE } from './demo.js';
+import { json, bad, SYM, cleanSym, cached, userOf, userSymbols, HOUR } from './util.js';
+import { handleFinnhub, tickFinnhub } from './live-finnhub.js';
+import { FH_CURATED } from './finnhub.js';
 
-const HOUR = 3600e3;
 const FUND_MAX_AGE = 20 * HOUR; // fundamentals older than this are refreshed
 
-const json = (d, status = 200) => new Response(JSON.stringify(d), {
-  status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-});
-const bad = (msg, status = 400) => json({ error: msg }, status);
-const SYM = /^[A-Z0-9^.\-=]{1,20}$/;
-const cleanSym = s => String(s || '').trim().toUpperCase();
-
-// Two-level cache: per-isolate memory, then Cloudflare's edge cache (works on custom domains).
-const MEM = new Map();
-async function cached(ctx, key, ttlSec, fn) {
-  const m = MEM.get(key);
-  if (m && m.exp > Date.now()) return m.v;
-  const req = new Request('https://cache.longview.internal/' + encodeURIComponent(key));
-  let hit = null;
-  try { hit = await caches.default.match(req); } catch {}
-  if (hit) { const v = await hit.json(); MEM.set(key, { v, exp: Date.now() + ttlSec * 1000 }); return v; }
-  const v = await fn();
-  MEM.set(key, { v, exp: Date.now() + ttlSec * 1000 });
-  if (MEM.size > 500) MEM.delete(MEM.keys().next().value);
-  try { ctx.waitUntil(caches.default.put(req, new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${ttlSec}` } }))); } catch {}
-  return v;
+// Which data source is active. DATA_PROVIDER picks one; otherwise whichever key exists; otherwise demo.
+function providerOf(env) {
+  const want = (env.DATA_PROVIDER || '').toLowerCase();
+  if (want === 'finnhub' && env.FINNHUB_API_KEY) return 'finnhub';
+  if (want === 'fmp' && env.FMP_API_KEY) return 'fmp';
+  if (env.FINNHUB_API_KEY && !env.FMP_API_KEY) return 'finnhub';
+  if (env.FMP_API_KEY) return 'fmp';
+  return 'demo';
 }
-
-// Cloudflare Access adds this header after sign-in. Without Access, everyone shares one portfolio ("me").
-const userOf = req => (req.headers.get('cf-access-authenticated-user-email') || 'me').toLowerCase();
 
 export default {
   async fetch(req, env, ctx) {
@@ -39,16 +25,20 @@ export default {
     try { return await api(req, env, ctx, url); }
     catch (e) { console.error(e); return json({ error: String(e.message || e) }, 502); }
   },
+  // Cron runs every minute. Finnhub refreshes a slice of quotes each minute; FMP refreshes fundamentals every 10.
   async scheduled(event, env, ctx) {
-    if (!env.FMP_API_KEY) return;
-    ctx.waitUntil(refresh(env, parseInt(env.REFRESH_BATCH || '7', 10)));
+    const mode = providerOf(env);
+    if (mode === 'finnhub') ctx.waitUntil(tickFinnhub(env).then(r => console.log('tick', JSON.stringify(r))));
+    else if (mode === 'fmp' && new Date(event.scheduledTime).getUTCMinutes() % 10 === 0) ctx.waitUntil(refresh(env, parseInt(env.REFRESH_BATCH || '7', 10)));
   },
 };
 
 async function api(req, env, ctx, url) {
-  const live = !!env.FMP_API_KEY;
-  const fmp = live ? new Fmp(env.FMP_API_KEY, env.FMP_BASE) : null;
+  const mode = providerOf(env);
   const user = userOf(req);
+  if (mode === 'finnhub') { const r = await handleFinnhub(req, env, ctx, url, user); if (r) return r; }
+  const live = mode === 'fmp';
+  const fmp = live ? new Fmp(env.FMP_API_KEY, env.FMP_BASE) : null;
   const p = url.pathname.replace(/\/+$/, '');
   const seg = p.split('/').slice(2); // after /api
   const M = req.method;
@@ -60,7 +50,8 @@ async function api(req, env, ctx, url) {
       const r = await env.DB.prepare('SELECT COUNT(*) n, MIN(updated_at) o FROM fundamentals').first();
       stored = r?.n || 0; oldest = r?.o || null;
     } catch {}
-    return json({ live, provider: live ? 'Financial Modeling Prep' : 'Demo sample', user, stored, curated: CURATED.length, oldest, now: Date.now() });
+    const names = { fmp: 'Financial Modeling Prep', finnhub: 'Finnhub (free beta)', demo: 'Demo sample' };
+    return json({ live: mode !== 'demo', mode, provider: names[mode], user, stored, curated: mode === 'finnhub' ? FH_CURATED.length : CURATED.length, oldest, now: Date.now(), history: mode === 'fmp' || !!env.TWELVEDATA_API_KEY });
   }
 
   /* ---- markets: global indices + FX/commodities ---- */
@@ -251,13 +242,6 @@ function merge(s, f, q) {
     if (!base.n && q.n) base.n = q.n;
   }
   return base;
-}
-
-async function userSymbols(env, user) {
-  try {
-    const r = await env.DB.prepare('SELECT symbol FROM holdings WHERE user = ?1 UNION SELECT symbol FROM watchlist WHERE user = ?1').bind(user).all();
-    return r.results.map(x => x.symbol);
-  } catch { return []; }
 }
 
 async function loadFundamentals(env, syms) {

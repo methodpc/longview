@@ -21,3 +21,8 @@ CREATE TABLE IF NOT EXISTS settings (
   user TEXT PRIMARY KEY,
   data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS quotes (
+  symbol TEXT PRIMARY KEY,
+  data TEXT NOT NULL,           -- normalized quote JSON
+  updated_at INTEGER NOT NULL
+);

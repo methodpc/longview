@@ -40,7 +40,7 @@ async function api(path, opts = {}) {
 
 /* ================= state ================= */
 const S = {
-  live: false, user: 'me', fx: null,
+  live: false, mode: 'demo', history: false, user: 'me', fx: null,
   base: store.get('lv_base', 'CAD'), strat: store.get('lv_strat', 'buffett'),
   monthly: store.get('lv_monthly', 500), years: store.get('lv_years', 10),
   U: {},           // symbol -> item
@@ -173,6 +173,7 @@ function toBase(v, ccy) {
 const toUSD = (v, ccy) => !ok(v) ? null : ccy === 'CAD' ? v / fxRate() : v;
 
 /* ================= derive, valuation, projection ================= */
+const region = s => s.home || (s.exch === 'TSX' ? 'CA' : 'US');
 function derive(s) {
   s.ccy ||= /\.(TO|V|NE)$/.test(s.t) ? 'CAD' : 'USD';
   s.eps = s.pe > 0 && s.price ? s.price / s.pe : null;
@@ -264,12 +265,18 @@ function addHolding(t, sh, c) {
 /* ================= rendering: shell ================= */
 function renderShell() {
   $('#badge').className = 'badge ' + (S.live ? 'live' : 'demo');
-  $('#badge').textContent = S.live ? 'Live' : 'Demo data';
+  $('#badge').textContent = S.live ? (S.mode === 'finnhub' ? 'Live · beta' : 'Live') : 'Demo data';
+  $('#q').placeholder = S.mode === 'finnhub' ? 'Search AAPL, RY, Shopify…' : 'Search AAPL, RY.TO, Shopify…';
+  $('#addT').placeholder = S.mode === 'finnhub' ? 'AAPL or RY' : 'AAPL or RY.TO';
+  $('#wT').placeholder = S.mode === 'finnhub' ? 'MSFT or CNI' : 'MSFT or CNR.TO';
+  const mk = $('#moverMkt [data-m="TSX"]'); if (mk) mk.textContent = S.mode === 'finnhub' ? 'Canadian (US-listed)' : 'TSX 60';
+  const av = $('#moverKind [data-k="vol"]'); if (av) av.textContent = S.mode === 'finnhub' ? 'Biggest moves' : 'Most active';
   $$('.seg [data-ccy]').forEach(b => b.setAttribute('aria-pressed', b.dataset.ccy === S.base));
   $('#pills').innerHTML = STRATS.map(s => `<button class="pill" type="button" data-s="${s.id}" aria-pressed="${s.id === S.strat}">${esc(s.name)}<small>${esc(s.short)}</small></button>`).join('');
   const st = SMAP[S.strat]; $('#tagline').innerHTML = `<b>${esc(st.style)}.</b> ${esc(st.idea)}`;
   const n = [];
-  if (!S.live) n.push('Demo mode: showing an illustrative sample of US companies, not live quotes. Add your FMP API key to the Worker to switch on live North American and global data.');
+  if (!S.live) n.push('Demo mode: showing an illustrative sample of US companies, not live quotes. Add a Finnhub or FMP API key to the Worker to switch on live data.');
+  else if (S.mode === 'finnhub') n.push('Beta data (Finnhub free plan): US-listed prices, refreshed about every 2–4 minutes in market hours. Canadian companies appear through their New York listings in USD, and world markets through US-listed country ETFs. USD/CAD is the Bank of Canada daily rate.');
   else if (S.pending > 20) n.push(`Building the fundamentals database: ${S.pending} symbols still to load. Prices are live now; scores fill in over the next few hours.`);
   n.push('Fair values, scores and projections come from simple, transparent models for learning. They are not financial advice.');
   $('#notice').textContent = n.join(' ');
@@ -295,9 +302,9 @@ function renderIndices() {
   $('#indices').innerHTML = I.map(i => {
     const o = isOpen(i.mkt);
     return `<button type="button" class="ix" data-open="${esc(i.s)}"><div class="r"><span>${esc(i.r)}</span><span>${o == null ? '' : `<i class="dot ${o ? 'open' : ''}"></i>${o ? 'Open' : 'Closed'}`}</span></div>
-      <div class="nm">${esc(i.n)}</div><div class="v">${plain(i.price, 2)}</div><div class="c ${cls(i.dchg)}">${pct(i.dchg, 2, true)}</div></button>`;
-  }).join('');
-  $('#macro').innerHTML = Mc.map(m => `<button type="button" class="ix" data-open="${esc(m.s)}"><div class="r"><span>${m.s === 'USDCAD' ? 'Currency' : m.s === 'BTCUSD' ? 'Crypto' : 'Commodity'}</span></div>
+      <div class="nm">${esc(i.n)}</div><div class="v">${i.via ? money(i.price, 'USD') : plain(i.price, 2)}</div><div class="c ${cls(i.dchg)}">${pct(i.dchg, 2, true)}${i.via ? ` <span class="ccy">via ${esc(i.via)}</span>` : ''}</div></button>`;
+  }).join('') + (I.some(i => i.via) ? `<p class="note" style="grid-column:1/-1;margin:0">World markets are tracked with US-listed country ETFs during the beta, so they move during US trading hours and include currency swings. The open/closed dot shows the home market.</p>` : '');
+  $('#macro').innerHTML = Mc.map(m => `<button type="button" class="ix" data-open="${esc(m.s)}"><div class="r"><span>${m.s === 'USDCAD' ? 'Currency' : /BTC/.test(m.s) ? 'Crypto' : 'Commodity'}</span><span>${m.asOf ? 'BoC ' + fmtDate(m.asOf) : ''}</span></div>
     <div class="nm">${esc(m.n)}</div><div class="v">${m.s === 'USDCAD' ? plain(m.price, 4) : plain(m.price, 2)}</div><div class="c ${cls(m.dchg)}">${pct(m.dchg, 2, true)}</div></button>`).join('');
 }
 function items() { return Object.values(S.U); }
@@ -315,8 +322,12 @@ function renderOpps() {
 }
 let MOV = { m: 'US', k: 'up' };
 function renderMovers() {
-  let L = items().filter(s => s.type === 'Stock' && s.exch === MOV.m && ok(s.dchg));
-  if (MOV.k === 'up') L.sort((a, b) => b.dchg - a.dchg); else if (MOV.k === 'down') L.sort((a, b) => a.dchg - b.dchg); else L.sort((a, b) => (toUSD(b.vol * b.price, b.ccy) || 0) - (toUSD(a.vol * a.price, a.ccy) || 0));
+  const want = MOV.m === 'TSX' ? 'CA' : 'US';
+  let L = items().filter(s => s.type === 'Stock' && region(s) === want && ok(s.dchg));
+  const hasVol = L.some(s => ok(s.vol));
+  if (MOV.k === 'up') L.sort((a, b) => b.dchg - a.dchg); else if (MOV.k === 'down') L.sort((a, b) => a.dchg - b.dchg);
+  else if (hasVol) L.sort((a, b) => (toUSD(b.vol * b.price, b.ccy) || 0) - (toUSD(a.vol * a.price, a.ccy) || 0));
+  else L.sort((a, b) => Math.abs(b.dchg) - Math.abs(a.dchg));
   L = L.slice(0, 8);
   $('#movers').innerHTML = `<thead><tr><th>Ticker</th><th>Name</th><th class="n">Price</th><th class="n">Today</th><th class="n" title="${esc(GLOSS.range[1])}">52-wk range</th><th class="n">Score</th></tr></thead><tbody>${L.map(s => `<tr class="click" data-open="${esc(s.t)}"><td class="tk">${esc(s.t)}</td><td class="nm">${esc(s.n)}</td><td class="n">${money(s.price, s.ccy)}</td><td class="n ${cls(s.dchg)}">${pct(s.dchg, 2, true)}</td><td class="n">${rangeBar(s)}</td><td class="n">${scorePill(evaluate(s).score)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">${S.live ? 'No quotes yet.' : 'Movers need live data.'}</td></tr>`}</tbody>`;
 }
@@ -350,7 +361,7 @@ function renderHeat() {
   const val = s => metric === 'dchg' ? s.dchg : metric === 'chg' ? s.chg : metric === 'score' ? evaluate(s).score : (fair(s)?.up ?? null);
   const dom = metric === 'score' ? [0, 50, 100] : metric === 'chg' ? [-40, 0, 40] : metric === 'dchg' ? [-3, 0, 3] : [-50, 0, 50];
   const color = d3.scaleLinear().domain(dom).range(['#b8332a', '#5a6470', '#1f8a4c']).clamp(true);
-  const L = items().filter(s => s.type === 'Stock' && s.mcapUSD > 0 && s.sec && (mkt === 'ALL' || s.exch === mkt));
+  const L = items().filter(s => s.type === 'Stock' && s.mcapUSD > 0 && s.sec && (mkt === 'ALL' || region(s) === (mkt === 'TSX' ? 'CA' : 'US')));
   if (!L.length) { el.innerHTML = '<p class="empty">The map fills in as company data loads.</p>'; return; }
   const secs = d3.group(L, s => s.sec);
   const root = d3.hierarchy({ children: [...secs].map(([k, v]) => ({ name: k, children: v })) }).sum(d => d.mcapUSD || 0).sort((a, b) => b.value - a.value);
@@ -417,7 +428,7 @@ function renderPortfolio() {
   // allocation
   const groups = {};
   rows.forEach(r => {
-    const k = ALLOC === 'ccy' ? r.ccy : ALLOC === 'ex' ? (r.s?.exch === 'TSX' ? 'Canada (TSX)' : 'United States') : (r.s ? (r.s.type === 'Fund' ? (r.s.kind === 'bond' ? 'Bond funds' : 'Stock index funds') : r.s.sec || 'Other') : 'Loading…');
+    const k = ALLOC === 'ccy' ? r.ccy : ALLOC === 'ex' ? (r.s ? (r.s.type === 'Fund' ? 'Funds' : region(r.s) === 'CA' ? 'Canadian companies' : 'US companies') : 'Loading…') : (r.s ? (r.s.type === 'Fund' ? (r.s.kind === 'bond' ? 'Bond funds' : 'Stock index funds') : r.s.sec || 'Other') : 'Loading…');
     groups[k] = (groups[k] || 0) + r.w;
   });
   const ge = Object.entries(groups).sort((a, b) => b[1] - a[1]);
@@ -437,8 +448,8 @@ function renderPortfolio() {
   if (rich.length) F.push(['info', `${rich.map(r => link(r.t)).join(', ')} trade${rich.length > 1 ? '' : 's'} well above the model's fair value. The market expects more growth than these estimates assume.`]);
   const near = rows.filter(r => r.s && ok(r.s.yearHigh) && r.s.price >= r.s.yearHigh * 0.98);
   if (near.length) F.push(['info', `${near.map(r => link(r.t)).join(', ')} ${near.length > 1 ? 'are' : 'is'} at or near a 52-week high.`]);
-  const cad = rows.filter(r => r.ccy === 'CAD').reduce((a, r) => a + r.w, 0);
-  if (rows.length && (cad > 85 || cad < 5)) F.push(['info', `${pct(cad, 0)} of your money is in Canadian-dollar holdings. Canada is about 3% of world stock markets, so ${cad > 85 ? 'many Canadian investors add US and international funds' : 'some Canadians keep a Canadian slice to reduce currency swings'}.`]);
+  const cad = rows.filter(r => r.s && r.s.type === 'Stock' && region(r.s) === 'CA').reduce((a, r) => a + r.w, 0) + rows.filter(r => r.ccy === 'CAD' && r.s?.type === 'Fund').reduce((a, r) => a + r.w, 0);
+  if (rows.length && (cad > 85 || cad < 5)) F.push(['info', `${pct(cad, 0)} of your money is in Canadian companies or CAD funds. Canada is about 3% of world stock markets, so ${cad > 85 ? 'many Canadian investors add US and international funds' : 'some Canadians keep a Canadian slice for dividends and to reduce currency swings'}.`]);
   if (!rows.some(r => r.s?.broad && r.s.kind !== 'bond')) F.push(['info', 'You hold no broad index fund. Even stock pickers often keep a core of the whole market (for example XEQT.TO, VFV.TO or VOO) and pick stocks around it.']);
   if (S.strat === 'bogle') { const ind = rows.filter(r => r.s?.type === 'Fund').reduce((a, r) => a + r.w, 0); F.push([ind >= 80 ? 'good' : 'info', `${pct(ind, 0)} of your money is in funds. A pure Bogle portfolio is close to 100%, often one all-in-one ETF or a mix of Canadian, US, international and bond funds.`]); }
   if (!rows.length) F.push(['info', 'Add a holding to get a checkup.']);
@@ -495,7 +506,7 @@ function renderScreener() {
   const secs = [...new Set(all.map(s => s.sec).filter(Boolean))].sort();
   const cur = $('#fsec').value; $('#fsec').innerHTML = '<option value="">All sectors</option>' + secs.map(s => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
   const rows = all.map(s => { const f = fair(s); return { s, score: evaluate(s).score, up: f ? f.up : null }; })
-    .filter(({ s, score, up }) => (!q || s.t.toLowerCase().includes(q) || (s.n || '').toLowerCase().includes(q)) && (!ex || s.exch === ex) && (!sec || s.sec === sec) && (!ty || s.type === ty)
+    .filter(({ s, score, up }) => (!q || s.t.toLowerCase().includes(q) || (s.n || '').toLowerCase().includes(q)) && (!ex || region(s) === (ex === 'TSX' ? 'CA' : 'US')) && (!sec || s.sec === sec) && (!ty || s.type === ty)
       && (isNaN(mpe) || (s.pe != null && s.pe <= mpe)) && (isNaN(mdiv) || (s.div || 0) >= mdiv) && (isNaN(mup) || (up != null && up >= mup)) && (!pass || (score != null && score >= 70)));
   const k = SORT.k, get = r => k === 'score' ? r.score : k === 'up' ? r.up : r.s[k];
   rows.sort((a, b) => { const A = get(a), B = get(b); if (A == null && B == null) return 0; if (A == null) return 1; if (B == null) return -1; return (typeof A === 'string' ? A.localeCompare(B) : A - B) * SORT.d; });
@@ -586,6 +597,7 @@ function renderReport(s, j) {
   let h = `
    <div class="dhead"><div><h2>${esc(s.n || s.t)}</h2><div class="note" style="margin:2px 0 0"><span class="tk">${esc(s.t)}</span>${s.exchName ? ' · ' + esc(s.exchName) : s.exch ? ' · ' + esc(s.exch) : ''}${s.sec && s.type === 'Stock' ? ' · ' + esc(s.sec) : ''}${isEq ? ' · prices in ' + C : ''}</div></div>
      <button type="button" class="x" id="dclose" aria-label="Close report" style="font-size:24px">×</button></div>
+   ${s.proxyFor ? `<p class="note">This ETF is how the beta tracks <b>${esc(s.proxyFor)}</b>.</p>` : ''}
    <div style="display:flex;align-items:baseline;gap:12px;margin-top:10px;flex-wrap:wrap"><span class="px">${priceTxt}</span><span class="num ${cls(s.dchg)}">${pct(s.dchg, 2, true)} today</span>${conv}</div>
    ${isEq ? `<div class="form" style="margin-top:10px"><label for="dsh">Shares<input id="dsh" type="number" min="0" step="any" size="6"></label><button class="btn" type="button" id="dadd">${owned ? 'Add more' : 'Add to portfolio'}</button><button class="btn ghost" type="button" id="dwatch">${watched ? 'Watching ✓' : 'Watch'}</button><span class="note" id="dmsg">${owned ? `You own ${owned.sh} shares.` : ''}</span></div>` : ''}
    <div class="sec"><h3>Price history <span class="seg" id="rng">${['1m', '6m', '1y', '5y'].map(r => `<button type="button" data-r="${r}" aria-pressed="${r === '1y'}">${r.toUpperCase()}</button>`).join('')}</span><span class="note" id="rngchg" style="margin:0"></span></h3><div class="chart" id="hchart"><p class="loading">Loading chart…</p></div></div>`;
@@ -652,7 +664,7 @@ async function loadHistory(s, range) {
   try {
     const j = await api(`history/${encodeURIComponent(s.t)}?range=${range}`);
     if (DRAWER !== s.t) return;
-    const pts = j.points; if (pts.length < 2) { el.innerHTML = '<p class="empty">No price history available.</p>'; return; }
+    const pts = j.points; if (pts.length < 2) { el.innerHTML = `<p class="empty">${esc(j.note || 'No price history available.')}</p>`; return; }
     const step = Math.max(1, Math.floor(pts.length / 260)); const P = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
     const ch = (P[P.length - 1][1] / P[0][1] - 1) * 100;
     const col = ch >= 0 ? 'var(--good)' : 'var(--bad)';
@@ -788,7 +800,7 @@ async function refreshLive() {
   renderShell();
   $$('.view').forEach(v => v.classList.toggle('on', v.id === 'view-markets'));
   try {
-    const st = await api('status'); S.live = st.live; S.user = st.user;
+    const st = await api('status'); S.live = st.live; S.user = st.user; S.mode = st.mode || (st.live ? 'fmp' : 'demo'); S.history = !!st.history;
     const [set, port, wl] = await Promise.all([api('settings').catch(() => ({ settings: {} })), api('portfolio').catch(() => null), api('watchlist').catch(() => null)]);
     const ss = set.settings || {};
     if (ss.base) S.base = ss.base; if (ss.strat && SMAP[ss.strat]) S.strat = ss.strat; if (ss.monthly != null) S.monthly = ss.monthly; if (ss.years) S.years = ss.years;

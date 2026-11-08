@@ -4,17 +4,36 @@ A long-term investing dashboard on Cloudflare Workers. It covers US and TSX stoc
 
 - **Front end:** `public/` (static HTML and JS, served by Workers Assets)
 - **Back end:** `src/index.js` (JSON API under `/api/*`, cron refresh)
-- **Data provider:** `src/fmp.js` (Financial Modeling Prep). Every vendor field is normalized here, so a different provider means replacing only this file.
+- **Data providers:** `src/finnhub.js` + `src/live-finnhub.js` (Finnhub free plan, current beta) and `src/fmp.js` (Financial Modeling Prep). Vendor fields are normalized in these files, so the front end doesn't change between providers.
 - **Database:** D1 `longview` (already created, with its schema applied)
 - **Domain:** `invest.cameronmedialab.com`. You can change it in `wrangler.jsonc`.
 
-Without an API key, the site runs in **demo mode** on an illustrative sample.
+Without any API key, the site runs in **demo mode** on an illustrative sample.
 
-## Deploy (about 10 minutes)
+## Data providers
 
-1. **Get an FMP key.** Sign up at financialmodelingprep.com.
-   - **Premium** is the tier that adds Canadian (TSX) coverage and 30+ years of history.
-   - **Ultimate** adds global stock listings. You don't need it for global *indices*.
+`DATA_PROVIDER` in `wrangler.jsonc` chooses where the data comes from. The matching API key must be stored as a Worker secret.
+
+| | **finnhub** (current beta) | **fmp** (planned) |
+|---|---|---|
+| Cost | Free | FMP Premium |
+| Stocks | US-listed only. Canadian companies appear through their New York listings, in USD. | US and TSX (`.TO`) |
+| World markets | US-listed country ETFs (SPY, EWC, EWU, EWG, EWJ, EWH) | Real indices (^GSPTSE, ^N225, ^HSI…) |
+| USD/CAD | Bank of Canada daily rate | Live quote |
+| Price charts | Only with an optional free Twelve Data key | Included |
+| Analyst data | Buy/hold/sell counts | Counts, price targets and EPS estimates |
+| Expected growth | Past 5-year EPS growth, capped at 15% | Analyst EPS estimates |
+| Quote freshness | Refreshed in the background every 2 to 4 minutes during market hours | Up to 60 seconds old |
+
+Switching to FMP later takes three steps, and nothing else changes:
+1. Set `"DATA_PROVIDER": "fmp"` in `wrangler.jsonc`.
+2. Run `npx wrangler secret put FMP_API_KEY`.
+3. Redeploy.
+
+## Deploy
+
+1. **Get a free Finnhub key** at finnhub.io/register.
+   - Optional: get a free Twelve Data key at twelvedata.com to turn on price charts.
 2. **Install and log in.** Use Node 20 or later.
    ```bash
    npm install
@@ -22,26 +41,26 @@ Without an API key, the site runs in **demo mode** on an illustrative sample.
    ```
 3. **Add the secrets.**
    ```bash
-   npx wrangler secret put FMP_API_KEY
-   npx wrangler secret put ADMIN_TOKEN   # any long random string; lets you trigger refreshes
+   npx wrangler secret put FINNHUB_API_KEY
+   npx wrangler secret put ADMIN_TOKEN          # any long random string
+   npx wrangler secret put TWELVEDATA_API_KEY   # optional
    ```
 4. **Deploy.**
    ```bash
    npx wrangler deploy
    ```
-   Because cameronmedialab.com's DNS is managed in Cloudflare, Wrangler creates the `invest` record and certificate automatically. GoDaddy only needs to keep pointing the nameservers at Cloudflare, which it already does.
+   Wrangler creates the `invest.cameronmedialab.com` DNS record and certificate automatically, because the zone's DNS is in Cloudflare.
    - If deploy says the zone isn't found, the domain lives in your other Cloudflare account. Change `account_id` in `wrangler.jsonc`, then recreate the D1 database there with `npx wrangler d1 create longview` and `npm run db:init`.
-5. **Fill the fundamentals database.** Prices are live immediately. Scores need each company's fundamentals, about 6 API calls per company for ~170 symbols.
-   - **Automatic:** the cron job loads 7 symbols every 10 minutes, so it's full after about 4 hours. After that it refreshes daily.
-   - **Faster:** run this a few times. Each run loads 7 symbols, the Workers Free plan's limit per request.
-     ```bash
-     curl -X POST -H "x-admin-token: YOUR_TOKEN" "https://invest.cameronmedialab.com/api/admin/refresh?n=7"
-     ```
-   - On **Workers Paid** ($5/mo), set `REFRESH_BATCH` to `"40"` in `wrangler.jsonc` and use `n=40`.
+   - **Auto-deploy from GitHub:** in the Cloudflare dashboard, go to Workers & Pages, open `longview`, then Settings, then Builds, and connect `methodpc/longview`. Every push to `main` then deploys automatically.
+5. **Wait about 10 minutes for the first fill.** A cron job runs every minute and uses up to `FINNHUB_BUDGET` calls (default 40 of the free plan's 60 per minute). The rest is left for people browsing the site.
+   - While the database is empty, it loads about 12 companies' fundamentals a minute.
+   - During US market hours, it then cycles through all quotes every 2 to 4 minutes.
+   - Holdings and watchlist symbols are refreshed first.
+   - To run one refresh immediately: `curl -X POST -H "x-admin-token: YOUR_TOKEN" https://invest.cameronmedialab.com/api/admin/refresh`.
 
 ## Keep it private (recommended)
 
-FMP's personal plans don't cover displaying their data publicly. Showing it to the public needs FMP's separate data display licence. Put the site behind **Cloudflare Access**, which is free for up to 50 users:
+Free and personal data plans (Finnhub's free plan, FMP's personal plans) don't cover public display, so keep the site behind **Cloudflare Access**, which is free for up to 50 users:
 
 1. Open Zero Trust, then Access, then Applications, and choose Add an application, then Self-hosted.
 2. Set the domain to `invest.cameronmedialab.com`.
@@ -54,7 +73,8 @@ Access also gives each signed-in person their own portfolio, watchlist and setti
 ```bash
 npm run db:init:local
 npx wrangler dev                                   # demo mode
-npx wrangler dev --var FMP_API_KEY:yourkey         # live data locally
+npx wrangler dev --var FINNHUB_API_KEY:yourkey     # live beta data locally
+npx wrangler dev --test-scheduled                 # then GET /__scheduled to run the cron once
 ```
 
 ## API

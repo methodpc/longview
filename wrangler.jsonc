@@ -15,16 +15,22 @@
     { "binding": "DB", "database_name": "longview", "database_id": "ea082495-a64f-4193-8cfa-120a7ddc9ced" }
   ],
 
-  // Refreshes stored fundamentals (a few symbols per run) every 10 minutes.
-  "triggers": { "crons": ["*/10 * * * *"] },
+  // Every minute: Finnhub mode refreshes a slice of quotes/fundamentals; FMP mode acts every 10th minute.
+  "triggers": { "crons": ["* * * * *"] },
 
   "vars": {
-    // 7 fits the Workers Free plan (50 subrequests per run). On Workers Paid, raise to 40.
+    // "finnhub" (free beta) or "fmp" (Premium). The matching API key secret must be set.
+    "DATA_PROVIDER": "finnhub",
+    // Finnhub calls per cron minute (free plan allows 60/min; the rest is left for people browsing).
+    "FINNHUB_BUDGET": "40",
+    // FMP: symbols refreshed per run. 7 fits the Workers Free plan (50 subrequests per run); on Workers Paid use 40.
     "REFRESH_BATCH": "7"
   },
   "observability": { "enabled": true }
 
   // Secrets (not in this file):
-  //   npx wrangler secret put FMP_API_KEY     <- required for live data
+  //   npx wrangler secret put FINNHUB_API_KEY      <- beta data (free plan)
+  //   npx wrangler secret put TWELVEDATA_API_KEY   <- optional, free plan; enables price charts in Finnhub mode
+  //   npx wrangler secret put FMP_API_KEY          <- later, with DATA_PROVIDER "fmp"
   //   npx wrangler secret put ADMIN_TOKEN     <- optional, lets you trigger /api/admin/refresh
 }
